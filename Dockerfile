@@ -6,10 +6,10 @@ RUN apt-get update && apt-get install -y \
     libfreetype6-dev libjpeg62-turbo-dev libpq-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install PHP extensions
+# Install PHP extensions (added pdo_pgsql)
 RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install -j$(nproc) gd \
-    && docker-php-ext-install pdo pdo_mysql mbstring exif pcntl bcmath zip opcache
+    && docker-php-ext-install pdo pdo_pgsql pdo_mysql mbstring exif pcntl bcmath zip opcache
 
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
@@ -37,16 +37,25 @@ RUN chown -R www-data:www-data /var/www/html \
 # Create .env file if it doesn't exist
 RUN if [ ! -f .env ]; then cp .env.example .env; fi
 
+# Add PostgreSQL SSL certificate
+RUN mkdir -p /etc/ssl/certs/ && \
+    curl -o /etc/ssl/certs/rds-combined-ca-bundle.pem https://truststore.pki.rds.amazonaws.com/rds-combined-ca-bundle.pem
+
 # Run composer scripts separately
 RUN composer dump-autoload --optimize
 RUN php artisan package:discover --ansi
 RUN php artisan key:generate --force
-RUN php artisan config:cache
-RUN php artisan route:cache
-RUN php artisan view:cache
+
+# Database migration and optimization
+RUN php artisan config:clear && \
+    php artisan cache:clear && \
+    php artisan view:clear && \
+    php artisan config:cache && \
+    php artisan route:cache && \
+    php artisan view:cache
 
 # Expose port
 EXPOSE 8000
 
-# Start server
-CMD ["php", "artisan", "serve", "--host=0.0.0.0", "--port=8000"]
+# Start server with migration
+CMD ["sh", "-c", "php artisan migrate --force && php artisan serve --host=0.0.0.0 --port=8000"]
